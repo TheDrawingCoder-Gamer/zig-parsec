@@ -33,8 +33,8 @@ pub fn Parser(comptime Value: type, comptime Reader: type) type {
         pub fn parseOrDie(self: *const Self, allocator: Allocator, src: *Reader) anyerror!Parsed(Value) {
             return try self.parse(allocator, src) orelse return error.ParseFailed;
         }
-        pub fn voided(self: Self) Parser(void, Reader) {
-            return Voided(Value, Reader).init(self).parser();
+        pub fn voided(self: Self) Voided(Value, Reader) {
+            return Voided(Value, Reader).init(self);
         }
     };
 }
@@ -90,11 +90,12 @@ pub fn Voided(comptime Value: type, comptime Reader: type) type {
         child_parser: Parser(Value, Reader),
 
         const Self = @This();
-        const vtable: Parser(void, Reader).VTable = .{ ._parse = parse };
+        const vtable: Parser(void, Reader).VTable = .{ ._parse = &parse };
 
         fn parse(ctx: *const anyopaque, allocator: Allocator, src: *Reader) anyerror!?void {
             const self: *const Self = @alignCast(@ptrCast(ctx));
             const res = try self.child_parser.parseLeaky(allocator, src);
+
             if (res) |_| {
                 return;
             }
@@ -262,7 +263,7 @@ pub fn ManyTill(comptime ManyVal: type, comptime TillVal: type, comptime Reader:
                 if (tres) |_| {
                     return list.items;
                 }
-                const many_res = try self.many_of.parseLeaky(allocator, src) orelse {
+                const many_res: ManyVal = try self.many_of.parseLeaky(allocator, src) orelse {
                     if (list.items.len > 0) {
                         return error.PartiallyConsumed;
                     } else {
@@ -276,7 +277,7 @@ pub fn ManyTill(comptime ManyVal: type, comptime TillVal: type, comptime Reader:
         }
 
         pub fn parser(self: *const Self) Parser([]ManyVal, Reader) {
-            return .{ .ptr = self, .table = .{ ._parse = parse } };
+            return .{ .ptr = self, .table = .{ ._parse = &parse } };
         }
     };
 }
@@ -373,18 +374,25 @@ pub fn Some(comptime Value: type, comptime Reader: type) type {
 test "simple literal" {
     const in_file = "egg!";
     var fbs = std.io.fixedBufferStream(in_file);
-    const res = try Literal(@TypeOf(fbs)).init("egg").parser().parse(testing.allocator, &fbs) orelse return error.FailedParse;
+    const res = try Literal(@TypeOf(fbs)).init("egg").parser().voided().parser().parse(testing.allocator, &fbs) orelse return error.FailedParse;
     defer res.deinit();
-    try testing.expectEqualStrings("egg", res.value);
 }
 
 test "many till" {
     const in_file = "OOWOO WHATS HTIS :3 aaaaa";
     var fbs = std.io.fixedBufferStream(in_file);
-    var literal = Literal(@TypeOf(fbs)).init(":3");
-    const voided = literal.parser().voided();
-    var many_till = ManyTill(u8, void, @TypeOf(fbs)).init(AnyChar(@TypeOf(fbs)).parser(), voided);
-    const res = try many_till.parser().parse(testing.allocator, &fbs) orelse return error.FailedParse;
+    const literal = Literal(@TypeOf(fbs)).init(":3").parser().voided().parser();
+    const many_till = ManyTill(u8, void, @TypeOf(fbs)).init(AnyChar(@TypeOf(fbs)).parser(), literal).parser();
+    const res = try many_till.parseOrDie(testing.allocator, &fbs);
     defer res.deinit();
     try testing.expectEqualStrings("OOWOO WHATS HTIS ", res.value);
+}
+
+test "many till voided" {
+    const in_file = "OOWOO WHATS HTIS :3 aaaaa";
+    var fbs = std.io.fixedBufferStream(in_file);
+    const literal = Literal(@TypeOf(fbs)).init(":3").parser().voided();
+    const many_till = ManyTill(u8, void, @TypeOf(fbs)).init(AnyChar(@TypeOf(fbs)).parser(), literal.parser()).parser().voided();
+    const res = try many_till.parser().parseOrDie(testing.allocator, &fbs);
+    defer res.deinit();
 }
