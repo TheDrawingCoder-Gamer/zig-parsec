@@ -33,8 +33,8 @@ pub fn Parser(comptime Value: type, comptime Reader: type) type {
         pub fn parseOrDie(self: *const Self, allocator: Allocator, src: *Reader) anyerror!Parsed(Value) {
             return try self.parse(allocator, src) orelse return error.ParseFailed;
         }
-        pub fn voided(self: Self) Voided(Value, Reader) {
-            return Voided(Value, Reader).init(self);
+        pub fn voided(self: Self) Parser(void, Reader) {
+            return Voided(Value, Reader).init(self).parser();
         }
     };
 }
@@ -382,8 +382,8 @@ test "many till" {
     const in_file = "OOWOO WHATS HTIS :3 aaaaa";
     var fbs = std.io.fixedBufferStream(in_file);
     var literal = Literal(@TypeOf(fbs)).init(":3");
-    var voided = Voided([]u8, @TypeOf(fbs)).init(literal.parser());
-    var many_till = ManyTill(u8, void, @TypeOf(fbs)).init(AnyChar(@TypeOf(fbs)).parser(), voided.parser());
+    const voided = literal.parser().voided();
+    var many_till = ManyTill(u8, void, @TypeOf(fbs)).init(AnyChar(@TypeOf(fbs)).parser(), voided);
     const res = try many_till.parser().parse(testing.allocator, &fbs) orelse return error.FailedParse;
     defer res.deinit();
     try testing.expectEqualStrings("OOWOO WHATS HTIS ", res.value);
