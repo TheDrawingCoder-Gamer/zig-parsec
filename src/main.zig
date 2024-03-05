@@ -13,14 +13,25 @@ pub fn Parser(comptime Value: type, comptime Reader: type) type {
         pub fn parseLeaky(self: *const Self, allocator: Allocator, src: *Reader) anyerror!?Value {
             return self.table._parse(self.ptr, allocator, src);
         }
+        pub fn parseOrDieLeaky(self: *const Self, allocator: Allocator, src: *Reader) anyerror!Value {
+            return try self.parseLeaky(allocator, src) orelse return error.ParseFailed;
+        }
         pub fn parse(self: *const Self, allocator: Allocator, src: *Reader) anyerror!?Parsed(Value) {
-            var arena = std.heap.ArenaAllocator.init(allocator);
-            errdefer arena.deinit();
-            const res = try self.parseLeaky(arena.allocator(), src) orelse {
-                arena.deinit();
+            var parsed = Parsed(Value){ .arena = try allocator.create(std.heap.ArenaAllocator), .value = undefined };
+            errdefer allocator.destroy(parsed.arena);
+            parsed.arena.* = std.heap.ArenaAllocator.init(allocator);
+            errdefer parsed.arena.deinit();
+
+            parsed.value = try self.parseLeaky(parsed.arena.allocator(), src) orelse {
+                parsed.arena.deinit();
+                allocator.destroy(parsed.arena);
                 return null;
             };
-            return .{ .allocator = arena, .value = res };
+            return parsed;
+        }
+        // Returns an error instead of null
+        pub fn parseOrDie(self: *const Self, allocator: Allocator, src: *Reader) anyerror!Parsed(Value) {
+            return try self.parse(allocator, src) orelse return error.ParseFailed;
         }
         pub fn voided(self: Self) Voided(Value, Reader) {
             return Voided(Value, Reader).init(self);
@@ -32,12 +43,14 @@ pub fn Parsed(comptime Value: type) type {
     return struct {
         const Self = @This();
 
-        allocator: std.heap.ArenaAllocator,
+        arena: *std.heap.ArenaAllocator,
         value: Value,
 
         // Frees all memory allocated while parsing self.value.
         pub fn deinit(self: *const Self) void {
-            self.allocator.deinit();
+            const alloc = self.arena.child_allocator;
+            self.arena.deinit();
+            alloc.destroy(self.arena);
         }
     };
 }
