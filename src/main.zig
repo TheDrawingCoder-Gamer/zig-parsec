@@ -33,8 +33,8 @@ pub fn Parser(comptime Value: type, comptime Reader: type) type {
         pub fn parseOrDie(self: *const Self, allocator: Allocator, src: *Reader) anyerror!Parsed(Value) {
             return try self.parse(allocator, src) orelse return error.ParseFailed;
         }
-        pub fn voided(self: Self) Voided(Value, Reader) {
-            return Voided(Value, Reader).init(self);
+        pub fn voided(self: *const Self) Parser(void, Reader) {
+            return Voided(Value, Reader).init(self).parser();
         }
     };
 }
@@ -87,7 +87,7 @@ pub fn Literal(comptime Reader: type) type {
 
 pub fn Voided(comptime Value: type, comptime Reader: type) type {
     return struct {
-        child_parser: Parser(Value, Reader),
+        child_parser: *const Parser(Value, Reader),
 
         const Self = @This();
         const vtable: Parser(void, Reader).VTable = .{ ._parse = &parse };
@@ -101,7 +101,7 @@ pub fn Voided(comptime Value: type, comptime Reader: type) type {
             }
             return null;
         }
-        pub fn init(child: Parser(Value, Reader)) Self {
+        pub fn init(child: *const Parser(Value, Reader)) Self {
             return .{ .child_parser = child };
         }
         pub fn parser(self: *const Self) Parser(void, Reader) {
@@ -115,7 +115,7 @@ pub fn Voided(comptime Value: type, comptime Reader: type) type {
 /// Will return an error if the buffer was partially consumed.
 pub fn OneOf(comptime Value: type, comptime Reader: type) type {
     return struct {
-        parsers: []Parser(Value, Reader),
+        parsers: []*const Parser(Value, Reader),
 
         const Self = @This();
         const vtable: Parser(Value, Reader).VTable = .{ ._parse = parse };
@@ -129,7 +129,7 @@ pub fn OneOf(comptime Value: type, comptime Reader: type) type {
             return null;
         }
 
-        pub fn init(children: []Parser(Value, Reader)) Self {
+        pub fn init(children: []*const Parser(Value, Reader)) Self {
             return Self{ .parsers = children };
         }
         pub fn parser(self: *const Self) Parser(Value, Reader) {
@@ -149,7 +149,7 @@ pub fn Sequence(comptime Tuple: type, comptime Reader: type) type {
         new_field.default_value = null;
         if (new_field.is_comptime)
             @compileError("Tuple can't have any comptime fields.");
-        new_field.type = Parser(field.type, Reader);
+        new_field.type = *const Parser(field.type, Reader);
         new_fields[i] = new_field;
     }
     const ParserTuple = @Type(.{ .Struct = .{ .is_tuple = true, .fields = &new_fields, .decls = &.{}, .layout = .Auto } });
@@ -245,12 +245,12 @@ pub fn CharWhere(comptime Context: type, comptime Reader: type, comptime whereFn
 /// Errors if many_of returns null after 1 successful parse
 pub fn ManyTill(comptime ManyVal: type, comptime TillVal: type, comptime Reader: type) type {
     return struct {
-        many_of: Parser(ManyVal, Reader),
-        til: Parser(TillVal, Reader),
+        many_of: *const Parser(ManyVal, Reader),
+        til: *const Parser(TillVal, Reader),
 
         const Self = @This();
 
-        pub fn init(many: Parser(ManyVal, Reader), til: Parser(TillVal, Reader)) Self {
+        pub fn init(many: *const Parser(ManyVal, Reader), til: *const Parser(TillVal, Reader)) Self {
             return .{ .many_of = many, .til = til };
         }
         // u free the list nerd
@@ -287,11 +287,11 @@ pub fn ManyTill(comptime ManyVal: type, comptime TillVal: type, comptime Reader:
 /// the reader to the start of the parse.
 pub fn Backtrack(comptime Value: type, comptime Reader: type) type {
     return struct {
-        child_parser: Parser(Value, Reader),
+        child_parser: *const Parser(Value, Reader),
 
         const Self = @This();
 
-        pub fn init(child: Parser(Value, Reader)) Self {
+        pub fn init(child: *const Parser(Value, Reader)) Self {
             return .{ .child_parser = child };
         }
         fn parse(ctx: *const anyopaque, allocator: Allocator, src: *Reader) anyerror!?Value {
@@ -318,10 +318,10 @@ pub fn Backtrack(comptime Value: type, comptime Reader: type) type {
 /// Always succeeds, unless the child parser were to return a partial consumtion/other error
 pub fn Many(comptime Value: type, comptime Reader: type) type {
     return struct {
-        many_of: Parser(Value, Reader),
+        many_of: *const Parser(Value, Reader),
 
         const Self = @This();
-        pub fn init(many_of: Parser(Value, Reader)) Self {
+        pub fn init(many_of: *const Parser(Value, Reader)) Self {
             return Self{ .many_of = many_of };
         }
 
@@ -338,7 +338,7 @@ pub fn Many(comptime Value: type, comptime Reader: type) type {
                 }
             }
         }
-        pub fn parser(self: *Self) Parser([]Value, Reader) {
+        pub fn parser(self: *const Self) Parser([]Value, Reader) {
             return .{ .ptr = self, .table = .{ ._parse = &parse } };
         }
     };
@@ -347,10 +347,10 @@ pub fn Many(comptime Value: type, comptime Reader: type) type {
 /// Returns 1 or more values parsed in a row
 pub fn Some(comptime Value: type, comptime Reader: type) type {
     return struct {
-        some_of: Parser(Value, Reader),
+        some_of: *const Parser(Value, Reader),
 
         const Self = @This();
-        pub fn init(some_of: Parser(Value, Reader)) Self {
+        pub fn init(some_of: *const Parser(Value, Reader)) Self {
             return Self{ .some_of = some_of };
         }
         fn parse(ctx: *const anyopaque, allocator: Allocator, src: *Reader) anyerror!?[]Value {
@@ -368,21 +368,24 @@ pub fn Some(comptime Value: type, comptime Reader: type) type {
                 }
             }
         }
+        pub fn parser(self: *const Self) Parser([]Value, Reader) {
+            return .{ .ptr = self, .table = .{ ._parse = &parse } };
+        }
     };
 }
 
 test "simple literal" {
     const in_file = "egg!";
     var fbs = std.io.fixedBufferStream(in_file);
-    const res = try Literal(@TypeOf(fbs)).init("egg").parser().voided().parser().parse(testing.allocator, &fbs) orelse return error.FailedParse;
+    const res = try Literal(@TypeOf(fbs)).init("egg").parser().voided().parse(testing.allocator, &fbs) orelse return error.FailedParse;
     defer res.deinit();
 }
 
 test "many till" {
     const in_file = "OOWOO WHATS HTIS :3 aaaaa";
     var fbs = std.io.fixedBufferStream(in_file);
-    const literal = Literal(@TypeOf(fbs)).init(":3").parser().voided().parser();
-    const many_till = ManyTill(u8, void, @TypeOf(fbs)).init(AnyChar(@TypeOf(fbs)).parser(), literal).parser();
+    const literal = Literal(@TypeOf(fbs)).init(":3").parser().voided();
+    const many_till = ManyTill(u8, void, @TypeOf(fbs)).init(&AnyChar(@TypeOf(fbs)).parser(), &literal).parser();
     const res = try many_till.parseOrDie(testing.allocator, &fbs);
     defer res.deinit();
     try testing.expectEqualStrings("OOWOO WHATS HTIS ", res.value);
@@ -392,7 +395,7 @@ test "many till voided" {
     const in_file = "OOWOO WHATS HTIS :3 aaaaa";
     var fbs = std.io.fixedBufferStream(in_file);
     const literal = Literal(@TypeOf(fbs)).init(":3").parser().voided();
-    const many_till = ManyTill(u8, void, @TypeOf(fbs)).init(AnyChar(@TypeOf(fbs)).parser(), literal.parser()).parser().voided();
-    const res = try many_till.parser().parseOrDie(testing.allocator, &fbs);
+    const many_till = ManyTill(u8, void, @TypeOf(fbs)).init(&AnyChar(@TypeOf(fbs)).parser(), &literal).parser();
+    const res = try many_till.voided().parseOrDie(testing.allocator, &fbs);
     defer res.deinit();
 }
