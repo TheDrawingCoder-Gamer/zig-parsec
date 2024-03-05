@@ -5,8 +5,8 @@ const testing = std.testing;
 pub fn Parser(comptime Value: type, comptime Reader: type) type {
     return struct {
         const Self = @This();
-        pub const VTable = struct { _parse: *const fn (ctx: *anyopaque, allocator: Allocator, src: *Reader) anyerror!?Value };
-        ptr: *anyopaque,
+        pub const VTable = struct { _parse: *const fn (ctx: *const anyopaque, allocator: Allocator, src: *Reader) anyerror!?Value };
+        ptr: *const anyopaque,
         table: VTable,
 
         /// Used internally, but exposed. If you call this directly some things may never be able to be freed.
@@ -62,8 +62,8 @@ pub fn Literal(comptime Reader: type) type {
         const vtable: ThisParser.VTable = .{ ._parse = parse };
 
         want: []const u8,
-        fn parse(ctx: *anyopaque, allocator: Allocator, src: *Reader) anyerror!?[]u8 {
-            const self: *Self = @alignCast(@ptrCast(ctx));
+        fn parse(ctx: *const anyopaque, allocator: Allocator, src: *Reader) anyerror!?[]u8 {
+            const self: *const Self = @alignCast(@ptrCast(ctx));
             const buf = try allocator.alloc(u8, self.want.len);
             errdefer allocator.free(buf);
             const read = try src.reader().readAll(buf);
@@ -79,7 +79,7 @@ pub fn Literal(comptime Reader: type) type {
         pub fn init(want: []const u8) Self {
             return .{ .want = want };
         }
-        pub fn parser(self: *Self) ThisParser {
+        pub fn parser(self: *const Self) ThisParser {
             return .{ .ptr = self, .table = vtable };
         }
     };
@@ -92,8 +92,8 @@ pub fn Voided(comptime Value: type, comptime Reader: type) type {
         const Self = @This();
         const vtable: Parser(void, Reader).VTable = .{ ._parse = parse };
 
-        fn parse(ctx: *anyopaque, allocator: Allocator, src: *Reader) anyerror!?void {
-            const self: *Self = @alignCast(@ptrCast(ctx));
+        fn parse(ctx: *const anyopaque, allocator: Allocator, src: *Reader) anyerror!?void {
+            const self: *const Self = @alignCast(@ptrCast(ctx));
             const res = try self.child_parser.parseLeaky(allocator, src);
             if (res) |_| {
                 return;
@@ -103,7 +103,7 @@ pub fn Voided(comptime Value: type, comptime Reader: type) type {
         pub fn init(child: Parser(Value, Reader)) Self {
             return .{ .child_parser = child };
         }
-        pub fn parser(self: *Self) Parser(void, Reader) {
+        pub fn parser(self: *const Self) Parser(void, Reader) {
             return .{ .ptr = self, .table = vtable };
         }
     };
@@ -119,8 +119,8 @@ pub fn OneOf(comptime Value: type, comptime Reader: type) type {
         const Self = @This();
         const vtable: Parser(Value, Reader).VTable = .{ ._parse = parse };
 
-        fn parse(ctx: *anyopaque, allocator: Allocator, src: *Reader) anyerror!?Value {
-            const self: *Self = @alignCast(@ptrCast(ctx));
+        fn parse(ctx: *const anyopaque, allocator: Allocator, src: *Reader) anyerror!?Value {
+            const self: *const Self = @alignCast(@ptrCast(ctx));
             for (self.parsers) |p| {
                 const res = try p.parseLeaky(allocator, src);
                 if (res) |r| return r;
@@ -131,7 +131,7 @@ pub fn OneOf(comptime Value: type, comptime Reader: type) type {
         pub fn init(children: []Parser(Value, Reader)) Self {
             return Self{ .parsers = children };
         }
-        pub fn parser(self: *Self) Parser(Value, Reader) {
+        pub fn parser(self: *const Self) Parser(Value, Reader) {
             return .{ .ptr = self, .table = vtable };
         }
     };
@@ -161,8 +161,8 @@ pub fn Sequence(comptime Tuple: type, comptime Reader: type) type {
             return .{ .parsers = parsers };
         }
 
-        fn parse(ctx: *anyopaque, allocator: Allocator, src: *Reader) anyerror!?Tuple {
-            const self: *Self = @alignCast(@ptrCast(ctx));
+        fn parse(ctx: *const anyopaque, allocator: Allocator, src: *Reader) anyerror!?Tuple {
+            const self: *const Self = @alignCast(@ptrCast(ctx));
             var res: Tuple = undefined;
             inline for (self.parsers, 0..) |p, i| {
                 const parsed = try p.parseLeaky(allocator, src);
@@ -175,7 +175,7 @@ pub fn Sequence(comptime Tuple: type, comptime Reader: type) type {
             return res;
         }
 
-        pub fn parser(self: *Self) Parser(Tuple, Reader) {
+        pub fn parser(self: *const Self) Parser(Tuple, Reader) {
             return .{ .ptr = self, .table = .{ ._parse = parse } };
         }
     };
@@ -184,7 +184,7 @@ pub fn Sequence(comptime Tuple: type, comptime Reader: type) type {
 pub fn AnyChar(comptime Reader: type) type {
     return struct {
         const Self = @This();
-        fn parse(ctx: *anyopaque, allocator: Allocator, src: *Reader) anyerror!?u8 {
+        fn parse(ctx: *const anyopaque, allocator: Allocator, src: *Reader) anyerror!?u8 {
             _ = ctx;
             _ = allocator;
             const res = try src.reader().readByte();
@@ -206,9 +206,9 @@ pub fn Char(comptime Reader: type) type {
         pub fn init(byte: u8) Self {
             return Self{ .byte = byte };
         }
-        fn parse(ctx: *anyopaque, allocator: Allocator, src: *Reader) anyerror!?u8 {
+        fn parse(ctx: *const anyopaque, allocator: Allocator, src: *Reader) anyerror!?u8 {
             _ = allocator;
-            const self: *Self = @alignCast(@ptrCast(ctx));
+            const self: *const Self = @alignCast(@ptrCast(ctx));
             const res = try src.reader().readByte();
             if (res == self.byte) {
                 return res;
@@ -216,7 +216,7 @@ pub fn Char(comptime Reader: type) type {
             src.seekableStream().seekBy(-1);
             return null;
         }
-        pub fn parser(self: *Self) Parser(u8, Reader) {
+        pub fn parser(self: *const Self) Parser(u8, Reader) {
             return .{ .ptr = self, .table = .{ ._parse = &parse } };
         }
     };
@@ -229,9 +229,9 @@ pub fn CharWhere(comptime Context: type, comptime Reader: type, comptime whereFn
 
         const Self = @This();
 
-        fn parse(ctx: *anyopaque, allocator: Allocator, src: *Reader) anyerror!?u8 {
+        fn parse(ctx: *const anyopaque, allocator: Allocator, src: *Reader) anyerror!?u8 {
             _ = allocator;
-            const self: *Self = @alignCast(@ptrCast(ctx));
+            const self: *const Self = @alignCast(@ptrCast(ctx));
             const res = try src.reader().readByte();
             if (whereFn(self.context, res)) {
                 return res;
@@ -253,8 +253,8 @@ pub fn ManyTill(comptime ManyVal: type, comptime TillVal: type, comptime Reader:
             return .{ .many_of = many, .til = til };
         }
         // u free the list nerd
-        fn parse(ctx: *anyopaque, allocator: Allocator, src: *Reader) anyerror!?[]ManyVal {
-            const self: *Self = @alignCast(@ptrCast(ctx));
+        fn parse(ctx: *const anyopaque, allocator: Allocator, src: *Reader) anyerror!?[]ManyVal {
+            const self: *const Self = @alignCast(@ptrCast(ctx));
             var list = std.ArrayList(ManyVal).init(allocator);
             errdefer list.clearAndFree();
             while (true) {
@@ -275,7 +275,7 @@ pub fn ManyTill(comptime ManyVal: type, comptime TillVal: type, comptime Reader:
             }
         }
 
-        pub fn parser(self: *Self) Parser([]ManyVal, Reader) {
+        pub fn parser(self: *const Self) Parser([]ManyVal, Reader) {
             return .{ .ptr = self, .table = .{ ._parse = parse } };
         }
     };
@@ -293,8 +293,8 @@ pub fn Backtrack(comptime Value: type, comptime Reader: type) type {
         pub fn init(child: Parser(Value, Reader)) Self {
             return .{ .child_parser = child };
         }
-        fn parse(ctx: *anyopaque, allocator: Allocator, src: *Reader) anyerror!?Value {
-            const self: *Self = @alignCast(@ptrCast(ctx));
+        fn parse(ctx: *const anyopaque, allocator: Allocator, src: *Reader) anyerror!?Value {
+            const self: *const Self = @alignCast(@ptrCast(ctx));
             const start_pos = try src.seekableStream().getPos();
             const res = self.child_parser.parseLeaky(allocator, src) catch |err| {
                 switch (err) {
@@ -307,7 +307,7 @@ pub fn Backtrack(comptime Value: type, comptime Reader: type) type {
             };
             return res;
         }
-        pub fn parser(self: *Self) Parser(Value, Reader) {
+        pub fn parser(self: *const Self) Parser(Value, Reader) {
             return .{ .ptr = self, .table = .{ ._parse = &parse } };
         }
     };
@@ -324,8 +324,8 @@ pub fn Many(comptime Value: type, comptime Reader: type) type {
             return Self{ .many_of = many_of };
         }
 
-        fn parse(ctx: *anyopaque, allocator: Allocator, src: *Reader) anyerror!?[]Value {
-            const self: *Self = @alignCast(@ptrCast(ctx));
+        fn parse(ctx: *const anyopaque, allocator: Allocator, src: *Reader) anyerror!?[]Value {
+            const self: *const Self = @alignCast(@ptrCast(ctx));
             const list = std.ArrayList(Value).init(allocator);
             errdefer list.clearAndFree();
             while (true) {
@@ -352,8 +352,8 @@ pub fn Some(comptime Value: type, comptime Reader: type) type {
         pub fn init(some_of: Parser(Value, Reader)) Self {
             return Self{ .some_of = some_of };
         }
-        fn parse(ctx: *anyopaque, allocator: Allocator, src: *Reader) anyerror!?[]Value {
-            const self: *Self = @alignCast(@ptrCast(ctx));
+        fn parse(ctx: *const anyopaque, allocator: Allocator, src: *Reader) anyerror!?[]Value {
+            const self: *const Self = @alignCast(@ptrCast(ctx));
             const list = std.ArrayList(Value).init(allocator);
             errdefer list.clearAndFree();
             const first = try self.some_of.parseLeaky(allocator, src) orelse return null;
@@ -373,9 +373,7 @@ pub fn Some(comptime Value: type, comptime Reader: type) type {
 test "simple literal" {
     const in_file = "egg!";
     var fbs = std.io.fixedBufferStream(in_file);
-    const testing_allocator = testing.allocator;
-    var literal = Literal(@TypeOf(fbs)).init("egg");
-    const res = try literal.parser().parse(testing_allocator, &fbs) orelse return error.FailedParse;
+    const res = try Literal(@TypeOf(fbs)).init("egg").parser().parse(testing.allocator, &fbs) orelse return error.FailedParse;
     defer res.deinit();
     try testing.expectEqualStrings("egg", res.value);
 }
