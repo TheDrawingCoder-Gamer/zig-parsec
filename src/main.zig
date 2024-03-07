@@ -220,7 +220,7 @@ pub fn Char(comptime Reader: type) type {
             if (res == self.byte) {
                 return res;
             }
-            src.seekableStream().seekBy(-1);
+            try src.seekableStream().seekBy(-1);
             return null;
         }
         pub fn parser(self: *const Self) Parser(u8, Reader) {
@@ -246,7 +246,7 @@ pub fn CharWhere(comptime Context: type, comptime Reader: type, comptime whereFn
             if (whereFn(self.context, res)) {
                 return res;
             }
-            src.seekableStream().seekBy(-1);
+            try src.seekableStream().seekBy(-1);
             return null;
         }
     };
@@ -335,12 +335,12 @@ pub fn Many(comptime Value: type, comptime Reader: type) type {
 
         fn parse(ctx: *const anyopaque, allocator: Allocator, src: *Reader) anyerror!?[]Value {
             const self: *const Self = @alignCast(@ptrCast(ctx));
-            const list = std.ArrayList(Value).init(allocator);
+            var list = std.ArrayList(Value).init(allocator);
             defer list.deinit();
             while (true) {
                 const res = try self.many_of.parseLeaky(allocator, src);
                 if (res) |r| {
-                    list.append(r);
+                    try list.append(r);
                 } else {
                     return try list.toOwnedSlice();
                 }
