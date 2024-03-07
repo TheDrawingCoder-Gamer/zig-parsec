@@ -188,7 +188,10 @@ pub fn AnyChar(comptime Reader: type) type {
         fn parse(ctx: *const anyopaque, allocator: Allocator, src: *Reader) anyerror!?u8 {
             _ = ctx;
             _ = allocator;
-            const res = try src.reader().readByte();
+            const res = src.reader().readByte() catch |err| switch (err) {
+                error.EndOfStream => return null,
+                else => return err,
+            };
             return res;
         }
 
@@ -210,7 +213,10 @@ pub fn Char(comptime Reader: type) type {
         fn parse(ctx: *const anyopaque, allocator: Allocator, src: *Reader) anyerror!?u8 {
             _ = allocator;
             const self: *const Self = @alignCast(@ptrCast(ctx));
-            const res = try src.reader().readByte();
+            const res = src.reader().readByte() catch |err| switch (err) {
+                error.EndOfStream => return null,
+                else => return err,
+            };
             if (res == self.byte) {
                 return res;
             }
@@ -233,7 +239,10 @@ pub fn CharWhere(comptime Context: type, comptime Reader: type, comptime whereFn
         fn parse(ctx: *const anyopaque, allocator: Allocator, src: *Reader) anyerror!?u8 {
             _ = allocator;
             const self: *const Self = @alignCast(@ptrCast(ctx));
-            const res = try src.reader().readByte();
+            const res = src.reader().readByte() catch |err| switch (err) {
+                error.EndOfStream => return null,
+                else => return err,
+            };
             if (whereFn(self.context, res)) {
                 return res;
             }
@@ -257,17 +266,16 @@ pub fn ManyTill(comptime ManyVal: type, comptime TillVal: type, comptime Reader:
         fn parse(ctx: *const anyopaque, allocator: Allocator, src: *Reader) anyerror!?[]ManyVal {
             const self: *const Self = @alignCast(@ptrCast(ctx));
             var list = std.ArrayList(ManyVal).init(allocator);
-            errdefer list.clearAndFree();
+            defer list.deinit();
             while (true) {
                 const tres = try self.til.parseLeaky(allocator, src);
                 if (tres) |_| {
-                    return list.items;
+                    return try list.toOwnedSlice();
                 }
                 const many_res: ManyVal = try self.many_of.parseLeaky(allocator, src) orelse {
                     if (list.items.len > 0) {
                         return error.PartiallyConsumed;
                     } else {
-                        list.clearAndFree();
                         return null;
                     }
                 };
@@ -328,13 +336,13 @@ pub fn Many(comptime Value: type, comptime Reader: type) type {
         fn parse(ctx: *const anyopaque, allocator: Allocator, src: *Reader) anyerror!?[]Value {
             const self: *const Self = @alignCast(@ptrCast(ctx));
             const list = std.ArrayList(Value).init(allocator);
-            errdefer list.clearAndFree();
+            defer list.deinit();
             while (true) {
                 const res = try self.many_of.parseLeaky(allocator, src);
                 if (res) |r| {
                     list.append(r);
                 } else {
-                    return list.items;
+                    return try list.toOwnedSlice();
                 }
             }
         }
@@ -356,7 +364,7 @@ pub fn Some(comptime Value: type, comptime Reader: type) type {
         fn parse(ctx: *const anyopaque, allocator: Allocator, src: *Reader) anyerror!?[]Value {
             const self: *const Self = @alignCast(@ptrCast(ctx));
             const list = std.ArrayList(Value).init(allocator);
-            errdefer list.clearAndFree();
+            errdefer list.deinit();
             const first = try self.some_of.parseLeaky(allocator, src) orelse return null;
             list.append(first);
             while (true) {
@@ -364,7 +372,7 @@ pub fn Some(comptime Value: type, comptime Reader: type) type {
                 if (res) |r| {
                     list.append(r);
                 } else {
-                    return list.items;
+                    return try list.toOwnedSlice();
                 }
             }
         }
